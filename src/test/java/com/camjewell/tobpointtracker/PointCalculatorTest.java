@@ -76,6 +76,7 @@ public class PointCalculatorTest
 		raid.recordDeath("a");
 		raid.recordDeath("a"); // same room, can't die twice
 		raid.completeThrough(Segment.MAIDEN);
+		raid.markAlive("a"); // respawned for Bloat
 		raid.recordDeath("a");
 
 		PointCalculator.RaidScore score = PointCalculator.calculate(raid);
@@ -84,6 +85,47 @@ public class PointCalculatorTest
 		assertEquals((1 / 7.7) * 78 / 86, score.getTeamUniqueChance(), EPSILON);
 		// 3 room points - 8, floored at 0
 		assertEquals(0, player(score, "a").getPoints());
+	}
+
+	@Test
+	public void lateDuplicateDeathAcrossRoomEndIsIgnored()
+	{
+		RaidState raid = raid("me", "a");
+		// ActorDeath during Verzik P3, then the party orb catches up just after Verzik dies
+		raid.completeThrough(Segment.VERZIK_P2);
+		assertTrue(raid.recordDeath("a"));
+		raid.completeThrough(Segment.VERZIK_P3);
+		assertFalse(raid.recordDeath("a"));
+
+		// Same lag across an ordinary room change
+		raid = raid("me", "a");
+		assertTrue(raid.recordDeath("a"));
+		raid.completeThrough(Segment.MAIDEN);
+		assertFalse(raid.recordDeath("a"));
+
+		// Once they respawn, they can die again
+		raid.markAlive("a");
+		assertTrue(raid.recordDeath("a"));
+		assertEquals(2, raid.getDeaths("a"));
+	}
+
+	@Test
+	public void currentChanceClimbsWhileProjectedOnlyDropsOnDeaths()
+	{
+		RaidState raid = raid("me", "a");
+		assertEquals(0, PointCalculator.calculate(raid, ChanceBasis.CURRENT).getTeamUniqueChance(), EPSILON);
+		assertEquals(1 / 9.1, PointCalculator.calculate(raid, ChanceBasis.PROJECTED).getTeamUniqueChance(), EPSILON);
+
+		raid.completeThrough(Segment.MAIDEN);
+		// 2 players * 3 room points + 2 MVP
+		assertEquals((1 / 9.1) * 8 / 50, PointCalculator.calculate(raid, ChanceBasis.CURRENT).getTeamUniqueChance(), EPSILON);
+		assertEquals(1 / 9.1, PointCalculator.calculate(raid, ChanceBasis.PROJECTED).getTeamUniqueChance(), EPSILON);
+
+		raid.recordDeath("a");
+		raid.completeThrough(Segment.VERZIK_P3);
+		double finished = (1 / 9.1) * 46 / 50;
+		assertEquals(finished, PointCalculator.calculate(raid, ChanceBasis.CURRENT).getTeamUniqueChance(), EPSILON);
+		assertEquals(finished, PointCalculator.calculate(raid, ChanceBasis.PROJECTED).getTeamUniqueChance(), EPSILON);
 	}
 
 	@Test

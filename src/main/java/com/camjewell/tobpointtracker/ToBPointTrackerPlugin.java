@@ -33,6 +33,7 @@ import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.party.PartyService;
 import net.runelite.client.party.WSClient;
+import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.events.PartyChanged;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
@@ -148,7 +149,7 @@ public class ToBPointTrackerPlugin extends Plugin
 		}
 		if (score == null)
 		{
-			score = PointCalculator.calculate(raid);
+			score = PointCalculator.calculate(raid, config.chanceBasis());
 		}
 		return score;
 	}
@@ -156,6 +157,15 @@ public class ToBPointTrackerPlugin extends Plugin
 	private void invalidate()
 	{
 		score = null;
+	}
+
+	@Subscribe
+	public void onConfigChanged(ConfigChanged event)
+	{
+		if (ToBPointTrackerConfig.GROUP.equals(event.getGroup()))
+		{
+			clientThread.invokeLater(this::invalidate);
+		}
 	}
 
 	@Subscribe
@@ -274,10 +284,22 @@ public class ToBPointTrackerPlugin extends Plugin
 			int previous = previousOrbs[i];
 			previousOrbs[i] = orb;
 
-			if (orb == ORB_DEAD && previous > 0 && previous <= ORB_MAX_ALIVE)
+			boolean alive = orb > 0 && orb <= ORB_MAX_ALIVE;
+			boolean wasAlive = previous > 0 && previous <= ORB_MAX_ALIVE;
+			if (orb == ORB_DEAD && wasAlive || alive && previous == ORB_DEAD)
 			{
 				String name = cleanName(client.getVarcStrValue(NAME_VARCS[i]));
-				if (!name.isEmpty())
+				if (name.isEmpty())
+				{
+					continue;
+				}
+
+				if (alive)
+				{
+					// Respawned for the next room
+					raid.markAlive(Text.standardize(name));
+				}
+				else
 				{
 					recordDeath(name);
 				}

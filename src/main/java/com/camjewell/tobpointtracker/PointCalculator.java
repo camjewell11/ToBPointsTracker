@@ -44,7 +44,7 @@ public final class PointCalculator
 		 */
 		double share;
 		/**
-		 * The player's chance of personally receiving a unique, if the raid finishes with no further deaths.
+		 * The player's chance of personally receiving a unique: the team chance times their share.
 		 */
 		double uniqueChance;
 	}
@@ -66,7 +66,8 @@ public final class PointCalculator
 		int estimatedMvpPoints;
 		int totalDeaths;
 		/**
-		 * Team chance of a unique, based on {@link #projectedTeamPoints}.
+		 * Team chance of a unique, based on {@link #projectedTeamPoints} or {@link #teamPoints} depending on the
+		 * {@link ChanceBasis}.
 		 */
 		double teamUniqueChance;
 		boolean complete;
@@ -84,6 +85,11 @@ public final class PointCalculator
 	}
 
 	public static RaidScore calculate(RaidState raid)
+	{
+		return calculate(raid, ChanceBasis.PROJECTED);
+	}
+
+	public static RaidScore calculate(RaidState raid, ChanceBasis basis)
 	{
 		final int teamSize = raid.getTeamSize();
 		final int roomsCompleted = raid.getRoomsCompleted();
@@ -112,7 +118,8 @@ public final class PointCalculator
 		final int teamPoints = Math.max(0, roomPoints * teamSize + awardedMvp - totalDeaths * Segment.DEATH_PENALTY);
 		final int maxPoints = maxTeamPoints(teamSize);
 		final int projected = Math.max(0, maxPoints - totalDeaths * Segment.DEATH_PENALTY);
-		final double teamChance = teamUniqueChance(raid.getMode(), projected, teamSize);
+		final double teamChance = teamUniqueChance(raid.getMode(),
+			basis == ChanceBasis.CURRENT ? teamPoints : projected, teamSize);
 
 		List<PlayerScore> players = new ArrayList<>(keys.size());
 		for (int i = 0; i < keys.size(); i++)

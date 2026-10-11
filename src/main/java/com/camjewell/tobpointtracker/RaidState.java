@@ -25,6 +25,9 @@ public class RaidState
 	private final Map<String, Integer> deaths = new HashMap<>();
 	// "room:name" keys, since a dead player spectates for the rest of the room and can't die twice in it
 	private final Set<String> deathKeys = new HashSet<>();
+	// Players currently dead. Death sources can report the same death several ticks apart (the party orbs lag behind
+	// ActorDeath), sometimes after the room has ended, so a player can't die again until they've been seen alive.
+	private final Set<String> deadPlayers = new HashSet<>();
 	// Damage per segment that we know is attributed to a player: ours from our own hitsplats, others from party updates
 	private final Map<String, int[]> damage = new HashMap<>();
 	// All boss damage hitsplats we saw, regardless of who dealt them
@@ -122,16 +125,26 @@ public class RaidState
 	}
 
 	/**
-	 * @return whether this was a new death (not already recorded for this player in the current room)
+	 * @return whether this was a new death (the player wasn't already dead, and hasn't died in the current room)
 	 */
 	public boolean recordDeath(String key)
 	{
-		if (!team.containsKey(key) || !deathKeys.add(getCurrentRoom() + ":" + key))
+		if (isComplete() || !team.containsKey(key) || deadPlayers.contains(key)
+			|| !deathKeys.add(getCurrentRoom() + ":" + key))
 		{
 			return false;
 		}
+		deadPlayers.add(key);
 		deaths.merge(key, 1, Integer::sum);
 		return true;
+	}
+
+	/**
+	 * Marks a dead player as alive again, once they've respawned for the next room.
+	 */
+	public void markAlive(String key)
+	{
+		deadPlayers.remove(key);
 	}
 
 	public int getDeaths(String key)

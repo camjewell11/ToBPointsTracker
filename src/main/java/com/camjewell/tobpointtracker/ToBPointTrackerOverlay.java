@@ -17,7 +17,7 @@ import net.runelite.client.ui.overlay.tooltip.TooltipManager;
 import net.runelite.client.util.ColorUtil;
 
 /**
- * Laid out like the Raid Points Overlay plugin's CoX overlay: Total, your points, team size and unique chance, with a
+ * Laid out like the Raid Points Overlay plugin's CoX overlay: Total, your points and unique chance, with a
  * breakdown on hover. Teammates only get their own line when they share damage through the party, since without it their
  * MVP points can't be known; they're left grouped in Total instead. Values that rely on an MVP estimate are prefixed with
  * {@link #ESTIMATE_PREFIX}.
@@ -88,14 +88,6 @@ class ToBPointTrackerOverlay extends OverlayPanel
 					addPlayerLine(score, p);
 				}
 			}
-		}
-
-		if (score.getTeamSize() > 1 && config.showTeamSize())
-		{
-			panelComponent.getChildren().add(LineComponent.builder()
-				.left("Party size:")
-				.right(String.valueOf(score.getTeamSize()))
-				.build());
 		}
 
 		String unique = uniqueText(score, local);

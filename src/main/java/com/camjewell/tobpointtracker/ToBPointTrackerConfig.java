@@ -21,21 +21,10 @@ public interface ToBPointTrackerConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "showTeamSize",
-		name = "Display team size",
-		description = "Display team size on the overlay if team size is greater than 1",
-		position = 1
-	)
-	default boolean showTeamSize()
-	{
-		return true;
-	}
-
-	@ConfigItem(
 		keyName = "pointsPercent",
 		name = "Display points percent",
 		description = "Display each player's points as a percent of the team's points, which is their share of the loot roll",
-		position = 2
+		position = 1
 	)
 	default boolean pointsPercent()
 	{
@@ -47,7 +36,7 @@ public interface ToBPointTrackerConfig extends Config
 		name = "Display teammates",
 		description = "Display the points of teammates who share their damage through your RuneLite party with this plugin."
 			+ " Other teammates are only counted in Total. Teammates with deaths are shown in red",
-		position = 3
+		position = 2
 	)
 	default boolean showPlayers()
 	{
@@ -58,11 +47,24 @@ public interface ToBPointTrackerConfig extends Config
 		keyName = "uniqueChance",
 		name = "Display the chance of a unique",
 		description = "Display the chance of a purple: your personal chance, the team's chance, or both as \"personal (team)\"",
-		position = 4
+		position = 3
 	)
 	default UniqueChanceDisplay uniqueChance()
 	{
 		return UniqueChanceDisplay.BOTH;
+	}
+
+	@ConfigItem(
+		keyName = "chanceBasis",
+		name = "Unique chance basis",
+		description = "Projected: starts at the full chance and only drops when someone dies, assuming the rest of the raid"
+			+ " is cleared without dying. Current: starts at 0% and climbs as rooms are completed, like the CoX and ToA"
+			+ " trackers. Both end at the same value once Verzik is dead.",
+		position = 4
+	)
+	default ChanceBasis chanceBasis()
+	{
+		return ChanceBasis.PROJECTED;
 	}
 
 	@ConfigItem(
