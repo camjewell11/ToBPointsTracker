@@ -528,27 +528,14 @@ public class ToBPointTrackerPlugin extends Plugin
 		PointCalculator.RaidScore s = getScore();
 		ChatMessageBuilder message = new ChatMessageBuilder()
 			.append(ChatColorType.HIGHLIGHT)
-			.append("ToB points")
+			.append("ToB")
 			.append(ChatColorType.NORMAL)
-			.append(String.format(" (%s, %d-man): team %d/%d", s.getMode().getDisplayName(), s.getTeamSize(),
-				s.getTeamPoints(), s.getMaxPoints()));
-
-		for (PointCalculator.PlayerScore p : s.getPlayers())
-		{
-			if (p.isLocal())
-			{
-				message.append(String.format(", you %s%d/%d", p.isEstimated() ? "~" : "", p.getPoints(),
-					Segment.MAX_PLAYER_POINTS));
-				if (s.getMode().canRollUniques())
-				{
-					message.append(" (").append(formatPercent(p.getShare())).append(" of loot weight)");
-				}
-			}
-		}
+			.append(String.format(" (%s, %d-man, %d death%s): ", s.getMode().getDisplayName(), s.getTeamSize(),
+				s.getTotalDeaths(), s.getTotalDeaths() == 1 ? "" : "s"));
 
 		if (s.getMode().canRollUniques())
 		{
-			message.append(". Purple chance: ")
+			message.append("purple chance ")
 				.append(ChatColorType.HIGHLIGHT)
 				.append(formatPercent(s.getTeamUniqueChance()))
 				.append(ChatColorType.NORMAL)
@@ -557,19 +544,21 @@ public class ToBPointTrackerPlugin extends Plugin
 			{
 				if (p.isLocal())
 				{
-					message.append(", ").append(p.isEstimated() ? "~" : "").append(formatPercent(p.getUniqueChance()))
+					message.append(", ")
+						.append(ChatColorType.HIGHLIGHT)
+						.append(ToBPointTrackerOverlay.formatChance(p))
+						.append(ChatColorType.NORMAL)
 						.append(" you");
+					if (!p.isExact())
+					{
+						message.append(String.format(" (%d MVP points unproven)", p.getMvpUnknown()));
+					}
 				}
 			}
 		}
 		else
 		{
-			message.append(". Entry Mode can't roll purples");
-		}
-
-		if (s.getEstimatedMvpPoints() > 0)
-		{
-			message.append(String.format(" (%d MVP points estimated)", s.getEstimatedMvpPoints()));
+			message.append("Entry Mode can't roll purples");
 		}
 
 		chatMessageManager.queue(QueuedMessage.builder()

@@ -17,20 +17,19 @@ import net.runelite.client.ui.overlay.tooltip.TooltipManager;
 import net.runelite.client.util.ColorUtil;
 
 /**
- * Laid out like the Raid Points Overlay plugin's CoX overlay: Total, your points and unique chance, with a
- * breakdown on hover. Teammates only get their own line when they share damage through the party, since without it their
- * MVP points can't be known; they're left grouped in Total instead. Values that rely on an MVP estimate are prefixed with
- * {@link #ESTIMATE_PREFIX}.
+ * Laid out like the Raid Points Overlay plugin's CoX overlay, but showing what actually changes a ToB unique chance:
+ * deaths, your purple chance, and the team's. Point breakdowns are on hover.
+ * <p>
+ * Your chance is a range when MVP points can't be proven without teammates' damage, and an exact value otherwise.
+ * Teammates only get their own line when they share damage through the party.
  */
 class ToBPointTrackerOverlay extends OverlayPanel
 {
-	private static final DecimalFormat POINTS_FORMAT = new DecimalFormat("#,###");
-	private static final DecimalFormat POINTS_PERCENT_FORMAT = new DecimalFormat(" (##0.00%)");
-	private static final DecimalFormat UNIQUE_FORMAT = new DecimalFormat("#0.00%");
-
-	private static final String ESTIMATE_PREFIX = "~";
+	private static final DecimalFormat CHANCE_FORMAT = new DecimalFormat("#0.00%");
+	private static final DecimalFormat CHANCE_RANGE_LOW_FORMAT = new DecimalFormat("#0.00");
 
 	private static final Color DEATH_COLOR = Color.RED;
+	private static final Color WON_COLOR = Color.GREEN;
 	private static final Color UNKNOWN_COLOR = Color.LIGHT_GRAY;
 
 	private final Client client;
@@ -65,37 +64,42 @@ class ToBPointTrackerOverlay extends OverlayPanel
 			return null;
 		}
 
+		// Deaths are the only thing that lowers the team's final points
 		panelComponent.getChildren().add(LineComponent.builder()
-			.left("Total:")
-			.right(POINTS_FORMAT.format(score.getTeamPoints()))
+			.left("Deaths:")
+			.right(String.valueOf(score.getTotalDeaths()))
+			.rightColor(score.getTotalDeaths() > 0 ? DEATH_COLOR : Color.WHITE)
 			.build());
 
-		PointCalculator.PlayerScore local = null;
-		for (PointCalculator.PlayerScore p : score.getPlayers())
-		{
-			if (p.isLocal())
-			{
-				local = p;
-				addPlayerLine(score, p);
-			}
-		}
-		if (config.showPlayers())
+		UniqueChanceDisplay display = config.uniqueChance();
+		boolean canRoll = score.getMode().canRollUniques();
+
+		if (canRoll && (display == UniqueChanceDisplay.PERSONAL_CHANCE || display == UniqueChanceDisplay.BOTH))
 		{
 			for (PointCalculator.PlayerScore p : score.getPlayers())
 			{
-				if (!p.isLocal() && p.isDamageKnown())
+				if (p.isLocal())
 				{
-					addPlayerLine(score, p);
+					addPlayerLine(p);
+				}
+			}
+			if (config.showPlayers())
+			{
+				for (PointCalculator.PlayerScore p : score.getPlayers())
+				{
+					if (!p.isLocal() && p.isDamageKnown())
+					{
+						addPlayerLine(p);
+					}
 				}
 			}
 		}
 
-		String unique = uniqueText(score, local);
-		if (unique != null)
+		if (display == UniqueChanceDisplay.TEAM_CHANCE || display == UniqueChanceDisplay.BOTH)
 		{
 			panelComponent.getChildren().add(LineComponent.builder()
-				.left("Unique:")
-				.right(unique)
+				.left("Team:")
+				.right(canRoll ? CHANCE_FORMAT.format(score.getTeamUniqueChance()) : "N/A (Entry)")
 				.build());
 		}
 
@@ -104,53 +108,26 @@ class ToBPointTrackerOverlay extends OverlayPanel
 		return dimension;
 	}
 
-	private void addPlayerLine(PointCalculator.RaidScore score, PointCalculator.PlayerScore p)
+	private void addPlayerLine(PointCalculator.PlayerScore p)
 	{
-		String right = (p.isEstimated() ? ESTIMATE_PREFIX : "") + POINTS_FORMAT.format(p.getPoints());
-		if (config.pointsPercent() && score.getTeamSize() > 1)
-		{
-			right += POINTS_PERCENT_FORMAT.format(p.getShare());
-		}
-
 		panelComponent.getChildren().add(LineComponent.builder()
 			.left(p.getName() + ":")
-			.right(right)
+			.right(formatChance(p))
 			.rightColor(p.getDeaths() > 0 ? DEATH_COLOR : Color.WHITE)
 			.build());
 	}
 
 	/**
-	 * @return the Unique line's text, or null to hide it
+	 * A player's chance as an exact value, or "low-high%" while some of their MVP points can't be proven.
 	 */
-	private String uniqueText(PointCalculator.RaidScore score, PointCalculator.PlayerScore local)
+	static String formatChance(PointCalculator.PlayerScore p)
 	{
-		UniqueChanceDisplay display = config.uniqueChance();
-		if (display == UniqueChanceDisplay.OFF)
+		if (p.isExact())
 		{
-			return null;
+			return CHANCE_FORMAT.format(p.getMinUniqueChance());
 		}
-		if (!score.getMode().canRollUniques())
-		{
-			return "N/A (Entry)";
-		}
-
-		String team = UNIQUE_FORMAT.format(score.getTeamUniqueChance());
-		if (local == null)
-		{
-			// Spectating, so there's no personal chance
-			return team;
-		}
-
-		String personal = (local.isEstimated() ? ESTIMATE_PREFIX : "") + UNIQUE_FORMAT.format(local.getUniqueChance());
-		switch (display)
-		{
-			case PERSONAL_CHANCE:
-				return personal;
-			case TEAM_CHANCE:
-				return team;
-			default:
-				return score.getTeamSize() > 1 ? personal + " (" + team + ")" : personal;
-		}
+		return CHANCE_RANGE_LOW_FORMAT.format(p.getMinUniqueChance() * 100) + "-"
+			+ CHANCE_FORMAT.format(p.getMaxUniqueChance());
 	}
 
 	private void addTooltip(PointCalculator.RaidScore score)
@@ -164,47 +141,86 @@ class ToBPointTrackerOverlay extends OverlayPanel
 
 		StringBuilder sb = new StringBuilder()
 			.append(String.format("%s Mode, %d-man", score.getMode().getDisplayName(), score.getTeamSize()))
-			.append(String.format("</br>Team: %d / %d max", score.getTeamPoints(), score.getMaxPoints()));
-		if (!score.isComplete())
+			.append(String.format("</br>Team points: %d / %d", score.getTeamPoints(), score.getMaxPoints()));
+		if (!score.isComplete() && score.getTotalDeaths() > 0)
 		{
 			sb.append(String.format("</br>If no more deaths: %d / %d", score.getProjectedTeamPoints(), score.getMaxPoints()));
 		}
 
 		for (PointCalculator.PlayerScore p : score.getPlayers())
 		{
-			sb.append("</br>").append(p.getName());
-			if (!p.isDamageKnown())
-			{
-				// We can't know their MVP points, only what they've lost to deaths
-				sb.append(String.format(": %d room", p.getRoomPoints()));
-				if (p.getDeaths() > 0)
-				{
-					sb.append(ColorUtil.wrapWithColorTag(String.format(" - %d (%d death%s)",
-						p.getDeaths() * Segment.DEATH_PENALTY, p.getDeaths(), p.getDeaths() == 1 ? "" : "s"), DEATH_COLOR));
-				}
-				sb.append(ColorUtil.wrapWithColorTag(" + MVP? (no party data)", UNKNOWN_COLOR));
-				continue;
-			}
-
-			sb.append(String.format(": %d room + %s%d MVP", p.getRoomPoints(),
-				p.isEstimated() ? ESTIMATE_PREFIX : "", p.getMvpPoints()));
-			if (p.getDeaths() > 0)
-			{
-				sb.append(ColorUtil.wrapWithColorTag(
-					String.format(" - %d (%d death%s)", p.getDeaths() * Segment.DEATH_PENALTY, p.getDeaths(),
-						p.getDeaths() == 1 ? "" : "s"),
-					DEATH_COLOR));
-			}
-			sb.append(String.format(" = %s%d", p.isEstimated() ? ESTIMATE_PREFIX : "", p.getPoints()));
+			sb.append("</br>").append(p.getName()).append(": ").append(formatPoints(p));
 		}
 
-		if (score.getEstimatedMvpPoints() > 0)
+		for (PointCalculator.PlayerScore p : score.getPlayers())
 		{
-			sb.append(ColorUtil.wrapWithColorTag(String.format(
-				"</br>~ %d MVP points estimated: teammates without the plugin are assumed to split their damage evenly",
-				score.getEstimatedMvpPoints()), UNKNOWN_COLOR));
+			if (p.isLocal())
+			{
+				appendMvpOutcomes(sb, p);
+			}
 		}
 
 		tooltipManager.add(new Tooltip(sb.toString()));
+	}
+
+	/**
+	 * e.g. "18 room + 2-6 MVP - 4 (1 death) = 16-20 pts"
+	 */
+	private static String formatPoints(PointCalculator.PlayerScore p)
+	{
+		StringBuilder sb = new StringBuilder().append(p.getRoomPoints()).append(" room + ");
+		if (p.getMvpUnknown() > 0)
+		{
+			sb.append(ColorUtil.wrapWithColorTag(p.getMvpWon() + "-" + (p.getMvpWon() + p.getMvpUnknown()), UNKNOWN_COLOR));
+		}
+		else
+		{
+			sb.append(p.getMvpWon());
+		}
+		sb.append(" MVP");
+
+		if (p.getDeaths() > 0)
+		{
+			sb.append(ColorUtil.wrapWithColorTag(String.format(" - %d (%d death%s)",
+				p.getDeaths() * Segment.DEATH_PENALTY, p.getDeaths(), p.getDeaths() == 1 ? "" : "s"), DEATH_COLOR));
+		}
+
+		sb.append(" = ").append(p.isExact() ? String.valueOf(p.getMinPoints()) : p.getMinPoints() + "-" + p.getMaxPoints())
+			.append(" pts");
+		return sb.toString();
+	}
+
+	private static void appendMvpOutcomes(StringBuilder sb, PointCalculator.PlayerScore p)
+	{
+		StringBuilder line = new StringBuilder();
+		for (Segment segment : Segment.values())
+		{
+			MvpOutcome outcome = p.getOutcomes()[segment.ordinal()];
+			if (outcome == null)
+			{
+				continue;
+			}
+
+			if (line.length() > 0)
+			{
+				line.append(", ");
+			}
+			switch (outcome)
+			{
+				case WON:
+					line.append(ColorUtil.wrapWithColorTag(segment.getDisplayName(), WON_COLOR));
+					break;
+				case LOST:
+					line.append(ColorUtil.wrapWithColorTag(segment.getDisplayName(), DEATH_COLOR));
+					break;
+				default:
+					line.append(ColorUtil.wrapWithColorTag(segment.getDisplayName() + "?", UNKNOWN_COLOR));
+			}
+		}
+
+		if (line.length() > 0)
+		{
+			sb.append("</br>Your MVPs: ").append(line);
+		}
 	}
 }

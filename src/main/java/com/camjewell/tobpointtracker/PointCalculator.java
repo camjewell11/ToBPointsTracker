@@ -28,25 +28,36 @@ public final class PointCalculator
 		String name;
 		boolean local;
 		int roomPoints;
-		int mvpPoints;
 		int deaths;
-		int points;
+		/**
+		 * MVP points the player has provably earned.
+		 */
+		int mvpWon;
+		/**
+		 * MVP points the player might have earned, which can't be proven either way without every teammate's damage.
+		 */
+		int mvpUnknown;
 		/**
 		 * Whether we have this player's damage, which is only true for us and RuneLite party members running the plugin.
 		 */
 		boolean damageKnown;
 		/**
-		 * Whether these points rely on an MVP estimate, rather than being exact.
+		 * The MVP outcome of each completed segment, indexed by {@link Segment} ordinal (null if not yet completed).
 		 */
-		boolean estimated;
+		MvpOutcome[] outcomes;
+		int minPoints;
+		int maxPoints;
 		/**
-		 * Fraction of the team's points this player holds, i.e. the chance a rolled unique goes to them.
+		 * The player's chance of personally receiving a unique (team chance times their share of the team's points),
+		 * assuming they lost / won every MVP that can't be proven.
 		 */
-		double share;
-		/**
-		 * The player's chance of personally receiving a unique: the team chance times their share.
-		 */
-		double uniqueChance;
+		double minUniqueChance;
+		double maxUniqueChance;
+
+		public boolean isExact()
+		{
+			return minPoints == maxPoints;
+		}
 	}
 
 	@Value
@@ -60,10 +71,6 @@ public final class PointCalculator
 		 * Team points at the end of the raid if every remaining room is cleared without another death.
 		 */
 		int projectedTeamPoints;
-		/**
-		 * MVP points from completed segments whose winner is estimated rather than certain.
-		 */
-		int estimatedMvpPoints;
 		int totalDeaths;
 		/**
 		 * Team chance of a unique, based on {@link #projectedTeamPoints} or {@link #teamPoints} depending on the
@@ -92,29 +99,23 @@ public final class PointCalculator
 	public static RaidScore calculate(RaidState raid, ChanceBasis basis)
 	{
 		final int teamSize = raid.getTeamSize();
-		final int roomsCompleted = raid.getRoomsCompleted();
 		final Map<String, String> team = raid.getTeam();
+		final List<String> keys = new ArrayList<>(team.keySet());
 
-		int[] mvpByPlayer = new int[team.size()];
-		List<String> keys = new ArrayList<>(team.keySet());
+		MvpOutcome[][] outcomes = new MvpOutcome[keys.size()][Segment.count()];
 		int awardedMvp = 0;
-		int estimatedMvp = 0;
 		for (Segment segment : raid.getCompleted())
 		{
 			awardedMvp += segment.getMvpPoints();
-			MvpResult mvp = findMvp(raid, keys, segment);
-			if (mvp.winner >= 0)
+			MvpOutcome[] segmentOutcomes = mvpOutcomes(raid, keys, segment);
+			for (int i = 0; i < keys.size(); i++)
 			{
-				mvpByPlayer[mvp.winner] += segment.getMvpPoints();
-			}
-			if (!mvp.certain)
-			{
-				estimatedMvp += segment.getMvpPoints();
+				outcomes[i][segment.ordinal()] = segmentOutcomes[i];
 			}
 		}
 
 		final int totalDeaths = raid.getTotalDeaths();
-		final int roomPoints = roomsCompleted * Segment.POINTS_PER_ROOM;
+		final int roomPoints = raid.getRoomsCompleted() * Segment.POINTS_PER_ROOM;
 		final int teamPoints = Math.max(0, roomPoints * teamSize + awardedMvp - totalDeaths * Segment.DEATH_PENALTY);
 		final int maxPoints = maxTeamPoints(teamSize);
 		final int projected = Math.max(0, maxPoints - totalDeaths * Segment.DEATH_PENALTY);
@@ -125,100 +126,131 @@ public final class PointCalculator
 		for (int i = 0; i < keys.size(); i++)
 		{
 			String key = keys.get(i);
+			int won = 0;
+			int unknown = 0;
+			for (Segment segment : raid.getCompleted())
+			{
+				MvpOutcome outcome = outcomes[i][segment.ordinal()];
+				if (outcome == MvpOutcome.WON)
+				{
+					won += segment.getMvpPoints();
+				}
+				else if (outcome == MvpOutcome.UNKNOWN)
+				{
+					unknown += segment.getMvpPoints();
+				}
+			}
+
 			int deaths = raid.getDeaths(key);
-			int points = Math.max(0, roomPoints + mvpByPlayer[i] - deaths * Segment.DEATH_PENALTY);
-			double share = teamPoints > 0 ? (double) points / teamPoints : 1.0 / keys.size();
-			boolean damageKnown = raid.getDamage().containsKey(key);
+			int base = roomPoints - deaths * Segment.DEATH_PENALTY;
+			int min = Math.max(0, base + won);
+			int max = Math.max(0, base + won + unknown);
 			players.add(new PlayerScore(
 				team.get(key),
 				key.equals(raid.getLocalName()),
 				roomPoints,
-				mvpByPlayer[i],
 				deaths,
-				points,
-				damageKnown,
-				!damageKnown || estimatedMvp > 0,
-				share,
-				teamChance * share));
+				won,
+				unknown,
+				raid.getDamage().containsKey(key),
+				outcomes[i],
+				min,
+				max,
+				teamChance * share(min, teamPoints, keys.size()),
+				teamChance * share(max, teamPoints, keys.size())));
 		}
 
-		return new RaidScore(raid.getMode(), teamSize, teamPoints, maxPoints, projected, estimatedMvp, totalDeaths,
-			teamChance, raid.isComplete(), players);
-	}
-
-	static final class MvpResult
-	{
-		/**
-		 * Index into the team of the (possibly estimated) MVP, or -1 if it's thought to be a teammate without party
-		 * data, or can't be guessed at all.
-		 */
-		final int winner;
-		final boolean certain;
-
-		MvpResult(int winner, boolean certain)
-		{
-			this.winner = winner;
-			this.certain = certain;
-		}
+		return new RaidScore(raid.getMode(), teamSize, teamPoints, maxPoints, projected, totalDeaths, teamChance,
+			raid.isComplete(), players);
 	}
 
 	/**
-	 * Finds the player who dealt the most damage in a segment.
-	 * <p>
-	 * It's certain when everyone shares damage, or when the leader among players we have damage for also out-damages
-	 * everything we saw but can't attribute (since all of it might belong to a single teammate without party data).
-	 * <p>
-	 * Otherwise it's estimated by assuming the unattributed damage was split evenly between the teammates without data:
-	 * the known leader wins if they beat that average, and if not the MVP goes to one of those teammates.
+	 * Fraction of the team's points a player holds, i.e. the chance a rolled unique goes to them. Before anyone has
+	 * earned points, everyone has an even share.
 	 */
-	static MvpResult findMvp(RaidState raid, List<String> keys, Segment segment)
+	private static double share(int points, int teamPoints, int players)
 	{
-		int best = -1;
-		int bestDamage = -1;
-		boolean tied = false;
+		return teamPoints > 0 ? Math.min(1, (double) points / teamPoints) : 1.0 / Math.max(1, players);
+	}
+
+	/**
+	 * Works out what can be proven about each player's MVP for a segment, without guessing how damage we can't
+	 * attribute was split between teammates who aren't sharing it.
+	 * <p>
+	 * For a player whose damage {@code d} we know, with {@code k} teammates not sharing data who between them dealt
+	 * {@code u} damage that we saw but can't attribute:
+	 * <ul>
+	 *     <li>WON if {@code d} beats every other known player, and beats {@code u} (since any one of them dealt at most
+	 *     {@code u}).</li>
+	 *     <li>LOST if another known player dealt more, or {@code u > k * d} (so at least one of them must have dealt
+	 *     more than {@code d}).</li>
+	 *     <li>Otherwise UNKNOWN. Exact ties are also UNKNOWN, as we don't know how the game breaks them.</li>
+	 * </ul>
+	 * A player without data is LOST if someone else provably WON, and otherwise UNKNOWN.
+	 */
+	static MvpOutcome[] mvpOutcomes(RaidState raid, List<String> keys, Segment segment)
+	{
+		final int n = keys.size();
+		int[] dmg = new int[n];
+		boolean[] known = new boolean[n];
 		int knownTotal = 0;
 		int unknownPlayers = 0;
-
-		for (int i = 0; i < keys.size(); i++)
+		for (int i = 0; i < n; i++)
 		{
-			int[] dmg = raid.getDamage().get(keys.get(i));
-			if (dmg == null)
+			int[] d = raid.getDamage().get(keys.get(i));
+			if (d == null)
 			{
 				unknownPlayers++;
 				continue;
 			}
+			known[i] = true;
+			dmg[i] = d[segment.ordinal()];
+			knownTotal += dmg[i];
+		}
+		final int unattributed = Math.max(0, raid.getTotalDamage()[segment.ordinal()] - knownTotal);
 
-			int d = dmg[segment.ordinal()];
-			knownTotal += d;
-			if (d > bestDamage)
+		MvpOutcome[] result = new MvpOutcome[n];
+		boolean anyoneWon = false;
+		for (int i = 0; i < n; i++)
+		{
+			if (!known[i])
 			{
-				best = i;
-				bestDamage = d;
-				tied = false;
+				continue;
 			}
-			else if (d == bestDamage)
+
+			boolean beaten = false;
+			boolean tied = false;
+			for (int j = 0; j < n; j++)
 			{
-				tied = true;
+				if (j != i && known[j])
+				{
+					beaten |= dmg[j] > dmg[i];
+					tied |= dmg[j] == dmg[i];
+				}
+			}
+
+			if (beaten || (unknownPlayers > 0 && unattributed > (long) unknownPlayers * dmg[i]))
+			{
+				result[i] = MvpOutcome.LOST;
+			}
+			else if (!tied && dmg[i] > 0 && (unknownPlayers == 0 || dmg[i] > unattributed))
+			{
+				result[i] = MvpOutcome.WON;
+				anyoneWon = true;
+			}
+			else
+			{
+				result[i] = MvpOutcome.UNKNOWN;
 			}
 		}
 
-		if (best < 0 || tied || bestDamage <= 0)
+		for (int i = 0; i < n; i++)
 		{
-			return new MvpResult(-1, false);
+			if (!known[i])
+			{
+				result[i] = anyoneWon ? MvpOutcome.LOST : MvpOutcome.UNKNOWN;
+			}
 		}
-
-		if (unknownPlayers == 0)
-		{
-			return new MvpResult(best, true);
-		}
-
-		int unattributed = Math.max(0, raid.getTotalDamage()[segment.ordinal()] - knownTotal);
-		if (bestDamage > unattributed)
-		{
-			return new MvpResult(best, true);
-		}
-
-		double averageUnknown = (double) unattributed / unknownPlayers;
-		return new MvpResult(bestDamage > averageUnknown ? best : -1, false);
+		return result;
 	}
 }

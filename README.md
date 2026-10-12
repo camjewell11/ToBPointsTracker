@@ -28,11 +28,25 @@ to party members after each boss/phase, so teammates running the plugin can attr
 
 Teammates don't need the plugin. Without it:
 
-- **Total** (team points) and the team purple chance are still exact.
-- They're grouped into Total instead of getting their own overlay line, like Raid Points Overlay's Total / You layout.
-- Your MVP points are exact when your damage beats all the boss damage the plugin saw but can't attribute.
-  Otherwise they're estimated by assuming that damage was split evenly between the teammates without data.
-  Estimated values are shown with a `~`, and the tooltip says how many MVP points were estimated.
+- Team points and the team purple chance are still exact, since MVP points always total 14.
+- Your MVP points are never guessed. For each boss or phase, the plugin only counts what it can prove:
+  - **Won:** your damage beats every sharing teammate and all the boss damage it saw but can't attribute.
+  - **Lost:** a sharing teammate out-damaged you, or the unattributed damage is more than (teammates without the
+    plugin × your damage), so one of them must have.
+  - **Unknown:** anything else.
+- Your purple chance is shown as a range (all Unknowns lost to all Unknowns won). It becomes exact when nothing is
+  Unknown, which is always the case when the whole team runs the plugin.
+
+## Overlay
+
+```
+Deaths:         1
+ThePrestiGIM:   2.30-2.95%
+Team:           10.48%
+```
+
+Hovering shows mode and team size, team points, each player's point breakdown, and which of your MVPs were won (green),
+lost (red) or unknown (?).
 
 ## Detection
 

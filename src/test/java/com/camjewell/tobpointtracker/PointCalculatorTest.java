@@ -63,9 +63,10 @@ public class PointCalculatorTest
 		PointCalculator.RaidScore score = PointCalculator.calculate(raid);
 		assertTrue(score.isComplete());
 		assertEquals(32, score.getTeamPoints());
-		assertEquals(32, player(score, "me").getPoints());
+		assertEquals(32, player(score, "me").getMinPoints());
+		assertTrue(player(score, "me").isExact());
 		assertEquals(1 / 9.1, score.getTeamUniqueChance(), EPSILON);
-		assertEquals(1 / 9.1, player(score, "me").getUniqueChance(), EPSILON);
+		assertEquals(1 / 9.1, player(score, "me").getMinUniqueChance(), EPSILON);
 	}
 
 	@Test
@@ -84,7 +85,7 @@ public class PointCalculatorTest
 		assertEquals(86 - 8, score.getProjectedTeamPoints());
 		assertEquals((1 / 7.7) * 78 / 86, score.getTeamUniqueChance(), EPSILON);
 		// 3 room points - 8, floored at 0
-		assertEquals(0, player(score, "a").getPoints());
+		assertEquals(0, player(score, "a").getMaxPoints());
 	}
 
 	@Test
@@ -151,68 +152,76 @@ public class PointCalculatorTest
 		raid.completeThrough(Segment.MAIDEN);
 
 		PointCalculator.RaidScore score = PointCalculator.calculate(raid);
-		assertEquals(0, score.getEstimatedMvpPoints());
-		assertEquals(3, player(score, "me").getPoints());
-		assertEquals(5, player(score, "a").getPoints());
+		assertEquals(MvpOutcome.LOST, player(score, "me").getOutcomes()[Segment.MAIDEN.ordinal()]);
+		assertEquals(MvpOutcome.WON, player(score, "a").getOutcomes()[Segment.MAIDEN.ordinal()]);
+		assertTrue(player(score, "me").isExact());
+		assertEquals(3, player(score, "me").getMinPoints());
+		assertEquals(5, player(score, "a").getMinPoints());
 		assertEquals(8, score.getTeamPoints());
 	}
 
 	@Test
-	public void mvpIsEstimatedForUsWhenWeBeatTheAverageUnknownTeammate()
+	public void mvpIsUnknownWhenTeammatesWithoutDataMightHaveWon()
 	{
 		RaidState raid = raid("me", "a", "b");
 		raid.recordHit(Segment.MAIDEN, 400, true);
-		raid.recordHit(Segment.MAIDEN, 600, false); // a and b combined, unknown split, average 300
+		raid.recordHit(Segment.MAIDEN, 600, false); // a and b combined, split unknown
 		raid.completeThrough(Segment.MAIDEN);
 
 		PointCalculator.RaidScore score = PointCalculator.calculate(raid);
-		assertEquals(2, score.getEstimatedMvpPoints());
-		assertEquals(5, player(score, "me").getPoints());
-		assertTrue(player(score, "me").isEstimated());
+		PointCalculator.PlayerScore me = player(score, "me");
+		assertEquals(MvpOutcome.UNKNOWN, me.getOutcomes()[Segment.MAIDEN.ordinal()]);
+		assertFalse(me.isExact());
+		assertEquals(3, me.getMinPoints());
+		assertEquals(5, me.getMaxPoints());
 		// Team total is still exact: MVP points are always awarded to someone
 		assertEquals(3 * 3 + 2, score.getTeamPoints());
+		double teamChance = score.getTeamUniqueChance();
+		assertEquals(teamChance * 3 / 11, me.getMinUniqueChance(), EPSILON);
+		assertEquals(teamChance * 5 / 11, me.getMaxUniqueChance(), EPSILON);
 	}
 
 	@Test
-	public void mvpIsEstimatedForAnUnknownTeammateWhenWeTrailTheAverage()
+	public void mvpIsProvablyWonWhenWeOutdamageEverythingElse()
 	{
 		RaidState raid = raid("me", "a", "b");
-		raid.recordHit(Segment.MAIDEN, 250, true);
-		raid.recordHit(Segment.MAIDEN, 600, false); // average 300 each
+		raid.recordHit(Segment.MAIDEN, 700, true);
+		raid.recordHit(Segment.MAIDEN, 600, false);
 		raid.completeThrough(Segment.MAIDEN);
 
 		PointCalculator.RaidScore score = PointCalculator.calculate(raid);
-		assertEquals(2, score.getEstimatedMvpPoints());
-		assertEquals(3, player(score, "me").getPoints());
-		assertTrue(player(score, "me").isEstimated());
-		assertEquals(3 * 3 + 2, score.getTeamPoints());
+		assertEquals(MvpOutcome.WON, player(score, "me").getOutcomes()[Segment.MAIDEN.ordinal()]);
+		assertTrue(player(score, "me").isExact());
+		assertEquals(5, player(score, "me").getMinPoints());
+		// Teammates without data provably lost, but their own points still can't be known
+		assertEquals(MvpOutcome.LOST, player(score, "a").getOutcomes()[Segment.MAIDEN.ordinal()]);
 	}
 
 	@Test
-	public void pointsAreExactWhenEveryoneSharesOrMvpIsCertain()
+	public void mvpIsProvablyLostWhenSomeTeammateMustHaveOutdamagedUs()
+	{
+		RaidState raid = raid("me", "a", "b");
+		raid.recordHit(Segment.MAIDEN, 200, true);
+		raid.recordHit(Segment.MAIDEN, 500, false); // more than 2 * 200, so a or b dealt over 200
+		raid.completeThrough(Segment.MAIDEN);
+
+		PointCalculator.PlayerScore me = player(PointCalculator.calculate(raid), "me");
+		assertEquals(MvpOutcome.LOST, me.getOutcomes()[Segment.MAIDEN.ordinal()]);
+		assertTrue(me.isExact());
+		assertEquals(3, me.getMinPoints());
+	}
+
+	@Test
+	public void tiesAreUnknown()
 	{
 		RaidState raid = raid("me", "a");
-		raid.recordHit(Segment.MAIDEN, 700, true);
-		raid.recordHit(Segment.MAIDEN, 600, false);
-		raid.completeThrough(Segment.MAIDEN);
+		raid.recordHit(Segment.BLOAT, 300, true);
+		raid.setPartyDamage("a", damage(Segment.BLOAT, 300));
+		raid.completeThrough(Segment.BLOAT);
 
 		PointCalculator.RaidScore score = PointCalculator.calculate(raid);
-		assertFalse(player(score, "me").isEstimated());
-		// Teammates without data are always estimated, since their MVP points aren't known
-		assertTrue(player(score, "a").isEstimated());
-	}
-
-	@Test
-	public void mvpIsCertainWhenWeOutdamageEverythingElse()
-	{
-		RaidState raid = raid("me", "a", "b");
-		raid.recordHit(Segment.MAIDEN, 700, true);
-		raid.recordHit(Segment.MAIDEN, 600, false);
-		raid.completeThrough(Segment.MAIDEN);
-
-		PointCalculator.RaidScore score = PointCalculator.calculate(raid);
-		assertEquals(0, score.getEstimatedMvpPoints());
-		assertEquals(5, player(score, "me").getPoints());
+		assertEquals(MvpOutcome.UNKNOWN, player(score, "me").getOutcomes()[Segment.BLOAT.ordinal()]);
+		assertEquals(MvpOutcome.UNKNOWN, player(score, "a").getOutcomes()[Segment.BLOAT.ordinal()]);
 	}
 
 	@Test
@@ -228,10 +237,25 @@ public class PointCalculatorTest
 
 		PointCalculator.RaidScore score = PointCalculator.calculate(raid);
 		assertEquals(50, score.getTeamPoints());
-		assertEquals(32, player(score, "me").getPoints());
-		assertEquals(18, player(score, "a").getPoints());
-		assertEquals(32.0 / 50, player(score, "me").getShare(), EPSILON);
-		assertEquals((1 / 9.1) * 32 / 50, player(score, "me").getUniqueChance(), EPSILON);
+		assertEquals(32, player(score, "me").getMinPoints());
+		assertEquals(18, player(score, "a").getMinPoints());
+		assertEquals((1 / 9.1) * 32 / 50, player(score, "me").getMinUniqueChance(), EPSILON);
+		assertEquals((1 / 9.1) * 32 / 50, player(score, "me").getMaxUniqueChance(), EPSILON);
+	}
+
+	@Test
+	public void chanceFormatsAsRangeOnlyWhenUnproven()
+	{
+		RaidState raid = raid("me", "a", "b");
+		raid.recordHit(Segment.MAIDEN, 400, true);
+		raid.recordHit(Segment.MAIDEN, 600, false);
+		raid.completeThrough(Segment.MAIDEN);
+		assertTrue(ToBPointTrackerOverlay.formatChance(player(PointCalculator.calculate(raid), "me")).matches("\\d+\\.\\d\\d-\\d+\\.\\d\\d%"));
+
+		RaidState solo = raid("me");
+		solo.recordHit(Segment.MAIDEN, 400, true);
+		solo.completeThrough(Segment.MAIDEN);
+		assertEquals("10.99%", ToBPointTrackerOverlay.formatChance(player(PointCalculator.calculate(solo), "me")));
 	}
 
 	@Test
