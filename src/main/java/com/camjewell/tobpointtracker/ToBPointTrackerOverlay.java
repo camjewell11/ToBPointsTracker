@@ -8,6 +8,7 @@ import java.text.DecimalFormat;
 import javax.inject.Inject;
 import net.runelite.api.Client;
 import net.runelite.api.Point;
+import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayPanel;
 import net.runelite.client.ui.overlay.OverlayPosition;
@@ -31,6 +32,10 @@ class ToBPointTrackerOverlay extends OverlayPanel
 	private static final Color DEATH_COLOR = Color.RED;
 	private static final Color WON_COLOR = Color.GREEN;
 	private static final Color UNKNOWN_COLOR = Color.LIGHT_GRAY;
+	private static final Color HEADER_COLOR = ColorScheme.BRAND_ORANGE;
+
+	private static final String BR = "</br>";
+	private static final String INDENT = "    ";
 
 	private final Client client;
 	private final ToBPointTrackerPlugin plugin;
@@ -139,22 +144,25 @@ class ToBPointTrackerOverlay extends OverlayPanel
 			return;
 		}
 
-		StringBuilder sb = new StringBuilder()
-			.append(String.format("%s Mode, %d-man", score.getMode().getDisplayName(), score.getTeamSize()))
-			.append(String.format("</br>Team points: %d / %d", score.getTeamPoints(), score.getMaxPoints()));
+		StringBuilder sb = new StringBuilder();
+		header(sb, String.format("%s Mode, %d players", score.getMode().getDisplayName(), score.getTeamSize()));
+		sb.append(BR).append(String.format("Team points: %d / %d", score.getTeamPoints(), score.getMaxPoints()));
 		if (!score.isComplete() && score.getTotalDeaths() > 0)
 		{
-			sb.append(String.format("</br>If no more deaths: %d / %d", score.getProjectedTeamPoints(), score.getMaxPoints()));
+			sb.append(BR).append(detail(String.format("%d / %d if no one else dies",
+				score.getProjectedTeamPoints(), score.getMaxPoints())));
+		}
+
+		sb.append(BR).append(BR);
+		header(sb, "Player points");
+		for (PointCalculator.PlayerScore p : score.getPlayers())
+		{
+			appendPlayerPoints(sb, p);
 		}
 
 		for (PointCalculator.PlayerScore p : score.getPlayers())
 		{
-			sb.append("</br>").append(p.getName()).append(": ").append(formatPoints(p));
-		}
-
-		for (PointCalculator.PlayerScore p : score.getPlayers())
-		{
-			if (p.isLocal())
+			if (p.isLocal() && score.getMode().canRollUniques())
 			{
 				appendMvpOutcomes(sb, p);
 			}
@@ -163,36 +171,60 @@ class ToBPointTrackerOverlay extends OverlayPanel
 		tooltipManager.add(new Tooltip(sb.toString()));
 	}
 
-	/**
-	 * e.g. "18 room + 2-6 MVP - 4 (1 death) = 16-20 pts"
-	 */
-	private static String formatPoints(PointCalculator.PlayerScore p)
+	private static void header(StringBuilder sb, String text)
 	{
-		StringBuilder sb = new StringBuilder().append(p.getRoomPoints()).append(" room + ");
+		sb.append(ColorUtil.wrapWithColorTag(text, HEADER_COLOR));
+	}
+
+	private static String detail(String text)
+	{
+		return ColorUtil.wrapWithColorTag(INDENT + text, UNKNOWN_COLOR);
+	}
+
+	/**
+	 * e.g.
+	 * <pre>
+	 * ThePrestiGIM: 16-20
+	 *     18 rooms + 2-6 MVP - 4 for 1 death
+	 * </pre>
+	 */
+	private static void appendPlayerPoints(StringBuilder sb, PointCalculator.PlayerScore p)
+	{
+		String points = p.isExact() ? String.valueOf(p.getMinPoints()) : p.getMinPoints() + "-" + p.getMaxPoints();
+		sb.append(BR).append(p.getName()).append(": ")
+			.append(ColorUtil.wrapWithColorTag(points, p.getDeaths() > 0 ? DEATH_COLOR : Color.WHITE));
+		if (!p.isDamageKnown())
+		{
+			sb.append(ColorUtil.wrapWithColorTag(" (no plugin)", UNKNOWN_COLOR));
+		}
+
+		StringBuilder breakdown = new StringBuilder()
+			.append(p.getRoomPoints()).append(" rooms + ");
 		if (p.getMvpUnknown() > 0)
 		{
-			sb.append(ColorUtil.wrapWithColorTag(p.getMvpWon() + "-" + (p.getMvpWon() + p.getMvpUnknown()), UNKNOWN_COLOR));
+			breakdown.append(p.getMvpWon()).append("-").append(p.getMvpWon() + p.getMvpUnknown());
 		}
 		else
 		{
-			sb.append(p.getMvpWon());
+			breakdown.append(p.getMvpWon());
 		}
-		sb.append(" MVP");
-
+		breakdown.append(" MVP");
 		if (p.getDeaths() > 0)
 		{
-			sb.append(ColorUtil.wrapWithColorTag(String.format(" - %d (%d death%s)",
-				p.getDeaths() * Segment.DEATH_PENALTY, p.getDeaths(), p.getDeaths() == 1 ? "" : "s"), DEATH_COLOR));
+			breakdown.append(String.format(" - %d for %d death%s",
+				p.getDeaths() * Segment.DEATH_PENALTY, p.getDeaths(), p.getDeaths() == 1 ? "" : "s"));
 		}
-
-		sb.append(" = ").append(p.isExact() ? String.valueOf(p.getMinPoints()) : p.getMinPoints() + "-" + p.getMaxPoints())
-			.append(" pts");
-		return sb.toString();
+		sb.append(BR).append(detail(breakdown.toString()));
 	}
 
+	/**
+	 * Lists completed segments grouped by whether you provably won, provably lost, or can't tell their MVP points.
+	 */
 	private static void appendMvpOutcomes(StringBuilder sb, PointCalculator.PlayerScore p)
 	{
-		StringBuilder line = new StringBuilder();
+		StringBuilder won = new StringBuilder();
+		StringBuilder lost = new StringBuilder();
+		StringBuilder unknown = new StringBuilder();
 		for (Segment segment : Segment.values())
 		{
 			MvpOutcome outcome = p.getOutcomes()[segment.ordinal()];
@@ -201,26 +233,31 @@ class ToBPointTrackerOverlay extends OverlayPanel
 				continue;
 			}
 
-			if (line.length() > 0)
+			StringBuilder list = outcome == MvpOutcome.WON ? won : outcome == MvpOutcome.LOST ? lost : unknown;
+			if (list.length() > 0)
 			{
-				line.append(", ");
+				list.append(", ");
 			}
-			switch (outcome)
-			{
-				case WON:
-					line.append(ColorUtil.wrapWithColorTag(segment.getDisplayName(), WON_COLOR));
-					break;
-				case LOST:
-					line.append(ColorUtil.wrapWithColorTag(segment.getDisplayName(), DEATH_COLOR));
-					break;
-				default:
-					line.append(ColorUtil.wrapWithColorTag(segment.getDisplayName() + "?", UNKNOWN_COLOR));
-			}
+			list.append(segment.getDisplayName()).append(" (").append(segment.getMvpPoints()).append(")");
 		}
 
-		if (line.length() > 0)
+		if (won.length() + lost.length() + unknown.length() == 0)
 		{
-			sb.append("</br>Your MVPs: ").append(line);
+			return;
+		}
+
+		sb.append(BR).append(BR);
+		header(sb, "Your MVPs");
+		appendOutcomeLine(sb, "Won", won, WON_COLOR);
+		appendOutcomeLine(sb, "Lost", lost, DEATH_COLOR);
+		appendOutcomeLine(sb, "Unknown", unknown, UNKNOWN_COLOR);
+	}
+
+	private static void appendOutcomeLine(StringBuilder sb, String label, StringBuilder segments, Color color)
+	{
+		if (segments.length() > 0)
+		{
+			sb.append(BR).append(ColorUtil.wrapWithColorTag(label + ": ", color)).append(segments);
 		}
 	}
 }
